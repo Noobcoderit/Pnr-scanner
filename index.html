@@ -97,9 +97,6 @@
   </div>
 
   <script>
-    // ══════════════════════════════════════════════════════
-    //  ⚠️ এখানে আপনার Apps Script URL বসানো আছে
-    // ══════════════════════════════════════════════════════
     const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwa4lVdpbLHWYMLlr7EFDPnM-U3g2CTM1UYWAns7gNo_fVsGyxg-VE7f385Pg8OcI6T/exec";
     
     const SUCCESS_MSG = "✅ জমা হলো";
@@ -119,6 +116,33 @@
 
     function cleanPnr(pnr) {
       return pnr.toString().replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '').toUpperCase();
+    }
+
+    // 🔥 শুধু স্ক্যান ডেটা থেকে আসল PNR বের করা
+    function extractActualPnr(rawText) {
+      let cleanText = rawText.toString().replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '').toUpperCase();
+      
+      // যদি ডেটা JSON ফরম্যাটে থাকে
+      if (cleanText.startsWith('{') && cleanText.endsWith('}')) {
+        try {
+          const data = JSON.parse(cleanText);
+          // PNR বা pnr ফিল্ড খোঁজা
+          const pnr = (data.PNR || data.pnr || '').toString().toUpperCase();
+          if (pnr) return pnr;
+        } catch (e) {}
+      }
+      // JSON না হলে পুরো টেক্সটটাই PNR
+      return cleanText;
+    }
+
+    // 🔥 PNR-এর শেষ ৪ ডিজিট ছাড়া বাকিগুলো X দিয়ে ঢেকে দেওয়া
+    function maskPnr(pnr) {
+      if (!pnr || pnr.length <= 4) return pnr;
+      const last4 = pnr.slice(-4);
+      const maskLength = pnr.length - 4;
+      // X এর সংখ্যা বের করা
+      const mask = 'X'.repeat(maskLength);
+      return mask + last4;
     }
 
     function showResult(type, message) {
@@ -144,10 +168,13 @@
         const res = await fetch(url);
         const data = await res.json();
 
+        // রেসপন্সে PNR দেখানোর সময় X দিয়ে ঢেকে দেখানো
+        const masked = maskPnr(clean);
+
         if (data.status === 'success') {
-          showResult('success', SUCCESS_MSG + ' — ' + clean);
+          showResult('success', SUCCESS_MSG + ' — ' + masked);
         } else if (data.status === 'duplicate') {
-          showResult('duplicate', DUPLICATE_MSG + '\n(PNR: ' + clean + ')');
+          showResult('duplicate', DUPLICATE_MSG + '\n(PNR: ' + masked + ')');
         } else {
           showResult('error', '❌ ' + (data.message || ERROR_MSG));
         }
@@ -211,10 +238,18 @@
 
     function onScanSuccess(decodedText) {
       if (navigator.vibrate) navigator.vibrate(200);
-      const clean = cleanPnr(decodedText);
+      
+      // QR থেকে শুধু আসল PNR টা বের করা
+      const actualPnr = extractActualPnr(decodedText);
+      
+      // স্ক্যান হয়েছে দেখানোর জন্য PNR-এর শেষ ৪ ডিজিট বাদে সব X করা
+      const masked = maskPnr(actualPnr);
+      
       scannedInfo.style.display = 'block';
-      scannedInfo.textContent = '📋 স্ক্যান হয়েছে: ' + clean;
-      stopScanner().then(() => sendPnr(clean));
+      scannedInfo.textContent = '📋 স্ক্যান হয়েছে: ' + masked;
+
+      // সার্ভারে আসল PNR পাঠানো
+      stopScanner().then(() => sendPnr(actualPnr));
     }
 
     async function stopScanner() {
