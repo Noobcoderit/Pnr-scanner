@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>টিকেট স্ক্যানার</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 16px;
+    }
+    .container {
+      background: #fff;
+      border-radius: 20px;
+      padding: 24px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      margin-top: 20px;
+    }
+    h1 { text-align: center; color: #333; font-size: 22px; margin-bottom: 20px; }
+    .btn-scan {
+      width: 100%; padding: 18px; font-size: 18px; font-weight: bold;
+      color: #fff; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none; border-radius: 12px; cursor: pointer; margin-bottom: 16px;
+      transition: transform 0.2s;
+    }
+    .btn-scan:active { transform: scale(0.97); }
+    .btn-scan:disabled { opacity: 0.6; cursor: not-allowed; }
+    #reader {
+      width: 100%; border-radius: 12px; overflow: hidden;
+      margin-bottom: 16px; display: none;
+    }
+    #reader.active { display: block; }
+    .divider {
+      text-align: center; color: #999; margin: 16px 0;
+      font-size: 14px; position: relative;
+    }
+    .divider::before, .divider::after {
+      content: ''; position: absolute; top: 50%;
+      width: 35%; height: 1px; background: #ddd;
+    }
+    .divider::before { left: 0; }
+    .divider::after { right: 0; }
+    input[type="text"] {
+      width: 100%; padding: 16px; font-size: 16px;
+      border: 2px solid #ddd; border-radius: 12px;
+      outline: none; transition: border-color 0.2s;
+      text-transform: uppercase;
+    }
+    input[type="text"]:focus { border-color: #667eea; }
+    .btn-submit {
+      width: 100%; padding: 16px; font-size: 16px; font-weight: bold;
+      color: #fff; background: #28a745; border: none;
+      border-radius: 12px; cursor: pointer; margin-top: 12px;
+      transition: transform 0.2s;
+    }
+    .btn-submit:active { transform: scale(0.97); }
+    .btn-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .result {
+      margin-top: 20px; padding: 16px; border-radius: 12px;
+      text-align: center; font-weight: bold; font-size: 16px;
+      display: none; white-space: pre-line;
+    }
+    .result.success { background: #d4edda; color: #155724; display: block; }
+    .result.duplicate { background: #fff3cd; color: #856404; display: block; }
+    .result.error { background: #f8d7da; color: #721c24; display: block; }
+    .result.info { background: #d1ecf1; color: #0c5460; display: block; }
+    .scanned-info {
+      margin-top: 12px; padding: 12px; background: #f8f9fa;
+      border-radius: 8px; font-size: 14px; color: #555;
+      display: none; word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎫 টিকেট স্ক্যানার</h1>
+    
+    <button class="btn-scan" id="btnScan">📷 স্ক্যান করুন</button>
+    <div id="reader"></div>
+    
+    <div class="divider">অথবা হাতে লিখুন</div>
+    
+    <input type="text" id="pnrInput" placeholder="PNR নাম্বার লিখুন" autocomplete="off">
+    <button class="btn-submit" id="btnSubmit">✅ সাবমিট করুন</button>
+    
+    <div class="scanned-info" id="scannedInfo"></div>
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    // ══════════════════════════════════════════════════════
+    //  ⚠️ এখানে আপনার Apps Script URL বসানো আছে
+    // ══════════════════════════════════════════════════════
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwa4lVdpbLHWYMLlr7EFDPnM-U3g2CTM1UYWAns7gNo_fVsGyxg-VE7f385Pg8OcI6T/exec";
+    
+    const SUCCESS_MSG = "✅ জমা হলো";
+    const DUPLICATE_MSG = "⚠️ টিকেট আগে ব্ল্যাকার কাছ থেকে নেওয়া হয়েছে";
+    const ERROR_MSG = "❌ সার্ভার সমস্যা, আবার চেষ্টা করুন";
+
+    // DOM
+    const btnScan = document.getElementById('btnScan');
+    const btnSubmit = document.getElementById('btnSubmit');
+    const pnrInput = document.getElementById('pnrInput');
+    const result = document.getElementById('result');
+    const scannedInfo = document.getElementById('scannedInfo');
+    const readerDiv = document.getElementById('reader');
+
+    let html5QrCode = null;
+    let isScanning = false;
+
+    function cleanPnr(pnr) {
+      return pnr.toString().replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '').toUpperCase();
+    }
+
+    function showResult(type, message) {
+      result.className = 'result ' + type;
+      result.textContent = message;
+      result.style.display = 'block';
+    }
+    function hideResult() {
+      result.style.display = 'none';
+      scannedInfo.style.display = 'none';
+    }
+
+    async function sendPnr(pnr) {
+      const clean = cleanPnr(pnr);
+      if (!clean) { showResult('error', '❌ PNR নাম্বার খালি!'); return; }
+
+      hideResult();
+      showResult('info', '⏳ পাঠানো হচ্ছে...');
+      btnSubmit.disabled = true;
+
+      try {
+        const url = APPS_SCRIPT_URL + '?pnr=' + encodeURIComponent(clean);
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.status === 'success') {
+          showResult('success', SUCCESS_MSG + ' — ' + clean);
+        } else if (data.status === 'duplicate') {
+          showResult('duplicate', DUPLICATE_MSG + '\n(PNR: ' + clean + ')');
+        } else {
+          showResult('error', '❌ ' + (data.message || ERROR_MSG));
+        }
+      } catch (err) {
+        showResult('error', ERROR_MSG + '\n(' + err.message + ')');
+      } finally {
+        btnSubmit.disabled = false;
+      }
+    }
+
+    btnSubmit.addEventListener('click', async () => {
+      const pnr = pnrInput.value.trim();
+      if (!pnr) { showResult('error', '❌ আগে PNR নাম্বার লিখুন!'); return; }
+      await sendPnr(pnr);
+      pnrInput.value = '';
+      pnrInput.focus();
+    });
+
+    pnrInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') btnSubmit.click();
+    });
+
+    btnScan.addEventListener('click', async () => {
+      if (isScanning) { await stopScanner(); return; }
+
+      hideResult();
+      readerDiv.classList.add('active');
+      btnScan.textContent = '⏹️ বন্ধ করুন';
+
+      try {
+        html5QrCode = new Html5Qrcode("reader");
+        const config = {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          rememberLastUsedCamera: true
+        };
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          config,
+          onScanSuccess,
+          () => {}
+        );
+        isScanning = true;
+      } catch (err) {
+        readerDiv.classList.remove('active');
+        btnScan.textContent = '📷 স্ক্যান করুন';
+        isScanning = false;
+
+        let msg = '❌ ক্যামেরা চালু করা যায়নি';
+        const e = err.toString();
+        if (e.includes('NotAllowedError') || e.includes('Permission')) {
+          msg = '❌ ক্যামেরা পারমিশন দিন! সেটিংস থেকে Allow করুন';
+        } else if (e.includes('NotFoundError')) {
+          msg = '❌ কোনো ক্যামেরা পাওয়া যায়নি';
+        } else if (e.includes('NotReadableError')) {
+          msg = '❌ ক্যামেরা অন্য অ্যাপে খোলা আছে। বন্ধ করে আবার চেষ্টা করুন';
+        }
+        showResult('error', msg);
+      }
+    });
+
+    function onScanSuccess(decodedText) {
+      if (navigator.vibrate) navigator.vibrate(200);
+      const clean = cleanPnr(decodedText);
+      scannedInfo.style.display = 'block';
+      scannedInfo.textContent = '📋 স্ক্যান হয়েছে: ' + clean;
+      stopScanner().then(() => sendPnr(clean));
+    }
+
+    async function stopScanner() {
+      if (html5QrCode && isScanning) {
+        try { await html5QrCode.stop(); } catch (e) {}
+      }
+      readerDiv.classList.remove('active');
+      btnScan.textContent = '📷 স্ক্যান করুন';
+      isScanning = false;
+      html5QrCode = null;
+    }
+  </script>
+</body>
+</html>
