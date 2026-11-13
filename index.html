@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>টিকেট স্ক্যানার</title>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body {
@@ -97,8 +102,23 @@
   </div>
 
   <script>
-    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwa4lVdpbLHWYMLlr7EFDPnM-U3g2CTM1UYWAns7gNo_fVsGyxg-VE7f385Pg8OcI6T/exec";
-    
+    // ══════════════════════════════════════════════════════
+    //  🔥 আপনার Firebase কনফিগারেশন এখানে বসানো হলো
+    // ══════════════════════════════════════════════════════
+    const firebaseConfig = {
+      apiKey: "AIzaSyBLAYVcLZSlpIGOu3V0sY4x7TjlhW4IH84",
+      authDomain: "pnr-scanner-16723.firebaseapp.com",
+      databaseURL: "https://pnr-scanner-16723-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "pnr-scanner-16723",
+      storageBucket: "pnr-scanner-16723.firebasestorage.app",
+      messagingSenderId: "202665945818",
+      appId: "1:202665945818:web:5745ad4292cf10f42453e3"
+    };
+
+    // Firebase ইনিশিয়ালাইজ
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
     const SUCCESS_MSG = "✅ জমা হলো";
     const DUPLICATE_MSG = "⚠️ টিকেট আগে ব্ল্যাকার কাছ থেকে নেওয়া হয়েছে";
     const ERROR_MSG = "❌ সার্ভার সমস্যা, আবার চেষ্টা করুন";
@@ -118,31 +138,23 @@
       return pnr.toString().replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '').toUpperCase();
     }
 
-    // 🔥 শুধু স্ক্যান ডেটা থেকে আসল PNR বের করা
     function extractActualPnr(rawText) {
       let cleanText = rawText.toString().replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '').toUpperCase();
-      
-      // যদি ডেটা JSON ফরম্যাটে থাকে
       if (cleanText.startsWith('{') && cleanText.endsWith('}')) {
         try {
           const data = JSON.parse(cleanText);
-          // PNR বা pnr ফিল্ড খোঁজা
           const pnr = (data.PNR || data.pnr || '').toString().toUpperCase();
           if (pnr) return pnr;
         } catch (e) {}
       }
-      // JSON না হলে পুরো টেক্সটটাই PNR
       return cleanText;
     }
 
-    // 🔥 PNR-এর শেষ ৪ ডিজিট ছাড়া বাকিগুলো X দিয়ে ঢেকে দেওয়া
     function maskPnr(pnr) {
       if (!pnr || pnr.length <= 4) return pnr;
       const last4 = pnr.slice(-4);
       const maskLength = pnr.length - 4;
-      // X এর সংখ্যা বের করা
-      const mask = 'X'.repeat(maskLength);
-      return mask + last4;
+      return 'X'.repeat(maskLength) + last4;
     }
 
     function showResult(type, message) {
@@ -155,6 +167,7 @@
       scannedInfo.style.display = 'none';
     }
 
+    // 🔥 Firebase-এ ডেটা পাঠানো
     async function sendPnr(pnr) {
       const clean = cleanPnr(pnr);
       if (!clean) { showResult('error', '❌ PNR নাম্বার খালি!'); return; }
@@ -164,19 +177,23 @@
       btnSubmit.disabled = true;
 
       try {
-        const url = APPS_SCRIPT_URL + '?pnr=' + encodeURIComponent(clean);
-        const res = await fetch(url);
-        const data = await res.json();
-
-        // রেসপন্সে PNR দেখানোর সময় X দিয়ে ঢেকে দেখানো
-        const masked = maskPnr(clean);
-
-        if (data.status === 'success') {
-          showResult('success', SUCCESS_MSG + ' — ' + masked);
-        } else if (data.status === 'duplicate') {
+        // PNR কে ডেটাবেসের key হিসেবে ব্যবহার করা হচ্ছে
+        const ticketRef = database.ref('tickets/' + clean);
+        
+        // চেক করা হচ্ছে ডুপ্লিকেট কি না
+        const snapshot = await ticketRef.once('value');
+        
+        if (snapshot.exists()) {
+          const masked = maskPnr(clean);
           showResult('duplicate', DUPLICATE_MSG + '\n(PNR: ' + masked + ')');
         } else {
-          showResult('error', '❌ ' + (data.message || ERROR_MSG));
+          // নতুন ডেটা সেভ করা
+          await ticketRef.set({
+            pnr: clean,
+            timestamp: firebase.database.ServerValue.TIMESTAMP
+          });
+          const masked = maskPnr(clean);
+          showResult('success', SUCCESS_MSG + ' — ' + masked);
         }
       } catch (err) {
         showResult('error', ERROR_MSG + '\n(' + err.message + ')');
@@ -185,6 +202,7 @@
       }
     }
 
+    // ম্যানুয়াল সাবমিট
     btnSubmit.addEventListener('click', async () => {
       const pnr = pnrInput.value.trim();
       if (!pnr) { showResult('error', '❌ আগে PNR নাম্বার লিখুন!'); return; }
@@ -197,6 +215,7 @@
       if (e.key === 'Enter') btnSubmit.click();
     });
 
+    // স্ক্যান শুরু
     btnScan.addEventListener('click', async () => {
       if (isScanning) { await stopScanner(); return; }
 
@@ -239,16 +258,12 @@
     function onScanSuccess(decodedText) {
       if (navigator.vibrate) navigator.vibrate(200);
       
-      // QR থেকে শুধু আসল PNR টা বের করা
       const actualPnr = extractActualPnr(decodedText);
-      
-      // স্ক্যান হয়েছে দেখানোর জন্য PNR-এর শেষ ৪ ডিজিট বাদে সব X করা
       const masked = maskPnr(actualPnr);
       
       scannedInfo.style.display = 'block';
       scannedInfo.textContent = '📋 স্ক্যান হয়েছে: ' + masked;
 
-      // সার্ভারে আসল PNR পাঠানো
       stopScanner().then(() => sendPnr(actualPnr));
     }
 
